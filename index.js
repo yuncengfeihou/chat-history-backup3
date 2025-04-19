@@ -800,7 +800,7 @@ jQuery(async () => {
             <div style="margin-bottom: 8px;">
                 <label style="display: inline-block; min-width: 120px;">防抖延迟 (ms):</label>
                 <input type="number" id="chat_backup_debounce_delay" value="${settings.backupDebounceDelay}" 
-                    min="300" max="10000" step="100" title="编辑或删除消息后，等待多少毫秒再执行备份 (建议 1000-3000)" 
+                    min="300" max="10000" step="100" title="编辑或删除消息后，等待多少毫秒再执行备份 (建议 1000-1500)" 
                     style="width: 80px;" />
             </div>
             <div>
