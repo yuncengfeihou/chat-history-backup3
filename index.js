@@ -941,15 +941,15 @@ jQuery(async () => {
             const immediateBackupEvents = [
                 event_types.MESSAGE_SENT,           // 用户发送消息后
                 event_types.GENERATION_ENDED,       // AI生成完成并添加消息后
-                event_types.MESSAGE_SWIPED,         // 用户切换AI回复后
-                event_types.CHARACTER_FIRST_MESSAGE_SELECTED, // 选择角色第一条消息时
-                event_types.IMAGE_SWIPED,           // 图片切换
+                event_types.CHARACTER_FIRST_MESSAGE_SELECTED, // 选择角色第一条消息时                
             ].filter(Boolean); // 过滤掉可能不存在的事件类型
 
             // 触发防抖备份的事件 (编辑性操作)
             const debouncedBackupEvents = [
                 event_types.MESSAGE_EDITED,        // 编辑消息后 (防抖)
                 event_types.MESSAGE_DELETED,       // 删除消息后 (防抖)
+                event_types.MESSAGE_SWIPED,         // 用户切换AI回复后 (防抖)
+                event_types.IMAGE_SWIPED,           // 图片切换 (防抖)
                 event_types.MESSAGE_FILE_EMBEDDED, // 文件嵌入 (防抖)
                 event_types.MESSAGE_REASONING_EDITED, // 编辑推理 (防抖)
                 event_types.MESSAGE_REASONING_DELETED, // 删除推理 (防抖)
