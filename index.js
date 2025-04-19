@@ -20,9 +20,9 @@ import {
 // 扩展名和设置初始化
 const PLUGIN_NAME = 'chat-history-backup3';
 const DEFAULT_SETTINGS = {
-    maxBackupsPerChat: 3,       // 每个聊天保存的最大备份数量
-    backupDebounceDelay: 1000,  // 防抖延迟时间 (毫秒) - 现在可配置
-    debug: true,                // 调试模式
+    maxTotalBackups: 3,        // 整个系统保留的最大备份数量
+    backupDebounceDelay: 1000, // 防抖延迟时间 (毫秒)
+    debug: true,               // 调试模式
 };
 
 // IndexedDB 数据库名称和版本
@@ -71,16 +71,30 @@ function initSettings() {
     console.log('[聊天自动备份] 初始化插件设置');
     if (!extension_settings[PLUGIN_NAME]) {
         console.log('[聊天自动备份] 创建新的插件设置');
-        extension_settings[PLUGIN_NAME] = { ...DEFAULT_SETTINGS }; // 使用扩展运算符创建副本
+        extension_settings[PLUGIN_NAME] = { ...DEFAULT_SETTINGS };
     }
 
     // 确保设置结构完整
     const settings = extension_settings[PLUGIN_NAME];
-    settings.maxBackupsPerChat = settings.maxBackupsPerChat ?? DEFAULT_SETTINGS.maxBackupsPerChat;
+    
+    // 如果之前使用的是旧版设置，则迁移到新版
+    if (settings.hasOwnProperty('maxBackupsPerChat') && !settings.hasOwnProperty('maxTotalBackups')) {
+        settings.maxTotalBackups = 3; // 默认值
+        delete settings.maxBackupsPerChat; // 移除旧设置
+        console.log('[聊天自动备份] 从旧版设置迁移到新版设置');
+    }
+    
+    // 确保所有设置都存在
+    settings.maxTotalBackups = settings.maxTotalBackups ?? DEFAULT_SETTINGS.maxTotalBackups;
     settings.backupDebounceDelay = settings.backupDebounceDelay ?? DEFAULT_SETTINGS.backupDebounceDelay;
     settings.debug = settings.debug ?? DEFAULT_SETTINGS.debug;
 
-    // 验证 backupDebounceDelay 的合理性
+    // 验证设置合理性
+    if (typeof settings.maxTotalBackups !== 'number' || settings.maxTotalBackups < 1) {
+        console.log(`[聊天自动备份] 无效的最大备份数 ${settings.maxTotalBackups}，重置为默认值 ${DEFAULT_SETTINGS.maxTotalBackups}`);
+        settings.maxTotalBackups = DEFAULT_SETTINGS.maxTotalBackups;
+    }
+    
     if (typeof settings.backupDebounceDelay !== 'number' || settings.backupDebounceDelay < 300) {
         console.log(`[聊天自动备份] 无效的防抖延迟 ${settings.backupDebounceDelay}，重置为默认值 ${DEFAULT_SETTINGS.backupDebounceDelay}`);
         settings.backupDebounceDelay = DEFAULT_SETTINGS.backupDebounceDelay;
@@ -376,7 +390,7 @@ async function executeBackupLogic(settings) {
             metadata: copiedMetadata || {}
         };
 
-        // 4. 获取现有备份
+        // 4. 检查当前聊天是否已有备份
         const existingBackups = await getBackupsForChat(chatKey);
         
         // 5. 检查重复并处理
@@ -401,33 +415,34 @@ async function executeBackupLogic(settings) {
 
         // 6. 保存新备份到 IndexedDB
         await saveBackupToDB(backup);
-
-        // 7. 清理旧备份，确保不超过数量限制
-        const allChatBackups = [...existingBackups, backup]; // 现在列表包含了最新的备份
-        allChatBackups.sort((a, b) => b.timestamp - a.timestamp); // 按时间降序排序
-
-        if (allChatBackups.length > settings.maxBackupsPerChat) {
-            logDebug(`备份数量 (${allChatBackups.length}) 超出限制 (${settings.maxBackupsPerChat})，准备删除旧备份`);
-            const backupsToDelete = allChatBackups.slice(settings.maxBackupsPerChat);
+        
+        // 7. 获取所有备份并限制总数量（关键修改点）
+        logDebug(`获取所有备份，限制总数量为 ${settings.maxTotalBackups}`);
+        const allBackups = await getAllBackups();
+        allBackups.sort((a, b) => b.timestamp - a.timestamp); // 按时间降序排序
+        
+        if (allBackups.length > settings.maxTotalBackups) {
+            const backupsToDelete = allBackups.slice(settings.maxTotalBackups);
+            logDebug(`总备份数 (${allBackups.length}) 超出系统限制 (${settings.maxTotalBackups})，将删除 ${backupsToDelete.length} 个旧备份`);
+            
             // 使用Promise.all并行删除，提高效率
             await Promise.all(backupsToDelete.map(oldBackup => {
-                logDebug(`删除旧备份: 时间 ${new Date(oldBackup.timestamp).toLocaleString()}, 最后消息ID ${oldBackup.lastMessageId}`);
+                logDebug(`删除旧备份: ${oldBackup.entityName} - ${oldBackup.chatName}, 时间 ${new Date(oldBackup.timestamp).toLocaleString()}`);
                 return deleteBackup(oldBackup.chatKey, oldBackup.timestamp);
             }));
         }
 
-        // 8. UI提示 (可选)
+        // 8. UI提示
         if (settings.debug) {
             toastr.info(`已备份聊天: ${entityName} (${lastMsgIndex + 1}条消息)`, '聊天自动备份');
         }
         logDebug(`成功完成聊天备份: ${entityName} - ${chatName}`);
 
         return true; // 表示备份成功
-
     } catch (error) {
         console.error('[聊天自动备份] 备份过程中发生严重错误:', error);
-        toastr.error(`备份失败: ${error.message}`, '聊天自动备份'); // 向用户显示错误
-        throw error; // 抛出错误给调用者
+        toastr.error(`备份失败: ${error.message}`, '聊天自动备份');
+        throw error;
     }
 }
 
@@ -779,14 +794,36 @@ jQuery(async () => {
         $('#extensions_settings').append(settingsHtml);
         console.log('[聊天自动备份] 已添加设置界面');
 
-        // 添加防抖延迟设置
+        // 设置控制项
         const $settingsBlock = $('<div class="chat_backup_control_item"></div>');
         $settingsBlock.html(`
-            <label>防抖延迟 (ms):</label>
-            <input type="number" id="chat_backup_debounce_delay" value="${settings.backupDebounceDelay}" 
-                min="300" max="10000" step="100" title="编辑或删除消息后，等待多少毫秒再执行备份 (建议 1000-3000)" />
+            <div style="margin-bottom: 8px;">
+                <label style="display: inline-block; min-width: 120px;">防抖延迟 (ms):</label>
+                <input type="number" id="chat_backup_debounce_delay" value="${settings.backupDebounceDelay}" 
+                    min="300" max="10000" step="100" title="编辑或删除消息后，等待多少毫秒再执行备份 (建议 1000-3000)" 
+                    style="width: 80px;" />
+            </div>
+            <div>
+                <label style="display: inline-block; min-width: 120px;">系统最大备份数:</label>
+                <input type="number" id="chat_backup_max_total" value="${settings.maxTotalBackups}" 
+                    min="1" max="10" step="1" title="系统中保留的最大备份数量" 
+                    style="width: 80px;" />
+            </div>
         `);
         $('.chat_backup_controls').prepend($settingsBlock);
+        
+        // 添加最大备份数设置监听
+        $(document).on('input', '#chat_backup_max_total', function() {
+            const total = parseInt($(this).val(), 10);
+            if (!isNaN(total) && total >= 1 && total <= 10) {
+                settings.maxTotalBackups = total;
+                logDebug(`系统最大备份数已更新为: ${total}`);
+                saveSettingsDebounced();
+            } else {
+                logDebug(`无效的系统最大备份数输入: ${$(this).val()}`);
+                $(this).val(settings.maxTotalBackups);
+            }
+        });
 
         // --- 使用事件委托绑定UI事件 ---
         $(document).on('click', '#chat_backup_manual_backup', performManualBackup);
@@ -894,6 +931,7 @@ jQuery(async () => {
         setTimeout(async () => {
             $('#chat_backup_debug_toggle').prop('checked', settings.debug);
             $('#chat_backup_debounce_delay').val(settings.backupDebounceDelay);
+            $('#chat_backup_max_total').val(settings.maxTotalBackups);
             await updateBackupsList();
         }, 300);
 
